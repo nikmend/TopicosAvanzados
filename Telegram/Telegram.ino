@@ -9,6 +9,10 @@
 #include <WiFiClientSecure.h>
 #include <UniversalTelegramBot.h>
 #include <PubSubClient.h>
+#include <Print.h>
+#include <MFRC522.h>
+#include <SdFat.h>
+
 // Initialize Wifi connection to the router
 char ssid[] = "ZTE";     // your network SSID (name)
 char password[] = "aa11bb22"; // your network key
@@ -18,18 +22,132 @@ const char* mqttUser = "telegram";
 
 // Initialize Telegram BOT
 #define BOTtoken "543265089:AAH7ss6IwBDzqGpfKZiF76J-InVJpXrOx4E"  // your Bot Token (Get from Botfather)
-
+const int cardSize = 4;
 WiFiClientSecure clientTel;
 UniversalTelegramBot bot(BOTtoken, clientTel);
 WiFiClient espClient;
 PubSubClient client(espClient);
-
+byte readCard[cardSize] = {1,2,3,4};
 int Bot_mtbs = 1000; //mean time between scan messages
 long Bot_lasttime;   //last time messages' scan has been done
 bool Start = false;
 
 const int ledPin = 16;
 int ledStatus = 0;
+#define SD_SS_PIN    4
+SdFat sd;
+char cardFile[] = "RFID_S2.txt";
+char cardTempFile[] = "cardsTemp.txt";
+//------------------------------------------------------------------------------------
+void PrintCard(byte printCard[cardSize])
+{
+  int index;
+
+  Serial.print("Card - ");
+  for(index = 0; index < 4; index++)
+  {
+    if (index > 0)
+    {
+      Serial.print(",");
+    }
+    Serial.print(printCard[index]);
+  }
+  Serial.println(" ");
+}
+
+//------------------------------------------------------------------------------------
+boolean findCard()
+{
+  byte currentCard[cardSize];
+  char text[10];
+  char c1;
+  int  index;
+  int  value;
+
+  Serial.print("find ");
+  PrintCard(readCard);
+
+  // open input file
+  ifstream readStr(cardFile);
+
+  // check for open error
+  if (!readStr.is_open())
+  {
+    Serial.println("open errorr");
+    return false;
+  }
+
+  index = 0;
+  // read until input fails
+  while (!readStr.eof()) 
+  {
+    readStr >> value >> c1; 
+
+    if (readStr.fail()) 
+    {
+      break;
+    }
+
+    currentCard[index] = value;
+    
+    index++;
+    if (index > 3)
+    {
+      Serial.print("file read ");
+      PrintCard(currentCard);
+      if ((memcmp(currentCard, readCard, 4)) == 0)
+      {
+        return true;
+      } 
+      index = 0;
+    }
+  }
+
+  return false;
+}
+
+//------------------------------------------------------------------------------------
+void addCard(){
+  int index;
+  SdFile writeFile;
+  Serial.print("add ");
+  PrintCard(readCard);
+  if (writeFile.open(cardFile, O_RDWR | O_CREAT | O_AT_END))
+  { 
+    for(index = 0; index < 4; index++)
+    {
+      writeFile.print(readCard[index]); 
+      writeFile.print(",");
+    }
+    writeFile.close();
+  }
+  return;
+}
+
+//------------------------------------------------------------------------------------
+
+void reconnect() {                                                    //Funcion que en caso de que se pierda la conexion al servidor MQTT reintenta la vinculacion
+ while (!client.connected()) 
+ {
+     Serial.print("ESPERANDO MQTT CONEXION");
+     if (client.connect("ESP8266Client")) 
+     {
+         Serial.println("connected");
+         client.publish("registrar", "avalible");
+         client.publish("ValidateRes","avalible");
+         client.subscribe("RegisRes");
+         client.subscribe("Validate");
+     } 
+     else 
+     {
+         Serial.print(client.state());
+         delay(5000);
+     }
+ }
+}
+
+//------------------------------------------------------------------------------------
+
 void registrar(){
    if (!client.connected()) {
    reconnect();
@@ -38,6 +156,9 @@ void registrar(){
   Serial.println(" client.publish(registrar,nuevo);");
   client.publish("registrar","nuevo");
 }
+
+//------------------------------------------------------------------------------------
+
 void handleNewMessages(int numNewMessages) {
   Serial.println("handleNewMessages");
   Serial.println(String(numNewMessages));
@@ -45,22 +166,15 @@ void handleNewMessages(int numNewMessages) {
   for (int i=0; i<numNewMessages; i++) {
     String chat_id = String(bot.messages[i].chat_id);
     String text = bot.messages[i].text;
-    Serial.println(text);
     String from_name = bot.messages[i].from_name;
     if (from_name == "") from_name = "Guest";
-
-    if (text == "/ledon") {
-      digitalWrite(ledPin, HIGH);   // turn the LED on (HIGH is the voltage level)
-      ledStatus = 1;
-      bot.sendMessage(chat_id, "Led is ON", "");
-    }
 
     if (text == "/ledoff") {
       ledStatus = 0;
       digitalWrite(ledPin, LOW);    // turn the LED off (LOW is the voltage level)
       bot.sendMessage(chat_id, "Led is OFF", "");
     }
-  if (text == "/Registrar nueva RFID") {
+  if (text == "/registrar") {
       registrar();
       bot.sendMessage(chat_id, "Nuevo registro", "");
     }
@@ -74,18 +188,29 @@ void handleNewMessages(int numNewMessages) {
     }
 
     if (text == "/start") {
-      String welcome = "Welcome to Universal Arduino Telegram Bot library, " + from_name + ".\n";
-      welcome += "This is Flash Led Bot example.\n\n";
-      welcome += "/ledon : to switch the Led ON\n";
+      String welcome = "Bienvenido, " + from_name + ".\n";
+      welcome += "Proyecto de Topicos.\n\n";
+      welcome += "/listar_usuarios : Muestra todos los usuarios\n";
       welcome += "/ledoff : to switch the Led OFF\n";
-      welcome += "/Registrar nueva RFID : para registrar un nuevo RFID\n";
+      welcome += "/registrar : para registrar un nuevo RFID\n";
+      welcome += "/status : Returns current status of LED\n";
       
+      Serial.println(welcome);
+      bot.sendMessage(chat_id, welcome, "");
+    }
+     if (text == "/menu") {
+      String welcome = "Bienvenido, " + from_name + ".\n";
+      welcome += "Proyecto de Topicos.\n\n";
+      welcome += "/listar_usuarios : Muestra todos los usuarios\n";
+      welcome += "/ledoff : to switch the Led OFF\n";
+      welcome += "/registrar : para registrar un nuevo RFID\n";
       welcome += "/status : Returns current status of LED\n";
       bot.sendMessage(chat_id, welcome, "Markdown");
     }
   }
 }
 
+//------------------------------------------------------------------------------------
 
 void setup() {
   Serial.begin(115200);
@@ -115,65 +240,119 @@ void setup() {
   pinMode(ledPin, OUTPUT); // initialize digital ledPin as an output.
   delay(10);
   digitalWrite(ledPin, LOW); // initialize pin as off
-}
-
-
-void callback(char* topic, byte* payload, unsigned int length) {      //Funcion que se ejecuta cada que llega un mensaje y lo que hace es imprimir su contenido
-
-
-Serial.print("Message arrived [");
-String chat_id = String(bot.messages[bot.getUpdates(bot.last_message_received + 1)].chat_id);
- Serial.print(topic);                                                               
- Serial.print("] ");
- char paychar[64];
- for (int i = 0; i < length; i++) {
-   Serial.print((char)payload[i]);
-   paychar[i]=((char)payload[i]);
- }
- paychar[length]='\0';
- Serial.print("==");
- Serial.print(topic);
- Serial.print("==");
-  Serial.print("RegisRes");
- Serial.print("==");
- Serial.println(strcmp(topic, "RegisRes"));
-  if(strcmp(topic, "RegisRes") == 0){
-    Serial.println("ha llegado algo de registry");
-    Serial.println(paychar);
-    if(paychar != "null"){
-       Serial.println(paychar);
-      bot.sendMessage(chat_id, "added ", "");
-      bot.sendMessage(chat_id, paychar, "");
-    }else{
-      bot.sendMessage(chat_id, "nothing added ", "");
-    }
+  if (!sd.begin(SD_SS_PIN, SPI_HALF_SPEED)){
     
+    Serial.println("ERROR eN SD");   
   }
 }
+//------------------------------------------------------------------------------------
 
+void Guardar(char* array){
+  Serial.println("Guardar");
+  Serial.println(array);
+  char *strings[10];
+  char *ptr = NULL;
 
-void reconnect() {                                                    //Funcion que en caso de que se pierda la conexion al servidor MQTT reintenta la vinculacion
- while (!client.connected()) 
- {
-     Serial.print("ESPERANDO MQTT CONEXION");
-     if (client.connect("ESP8266Client")) 
-     {
-         Serial.println("connected");
-         client.publish("registrar", "avalible");
-         client.subscribe("RegisRes");
-     } 
-     else 
-     {
-         Serial.print(client.state());
-         delay(5000);
-     }
- }
+    byte index = 0;
+    ptr = strtok(array, ", ");  // takes a list of delimiters
+    while(ptr != NULL)
+    {
+        strings[index] = ptr;
+      
+        index++;
+        ptr = strtok(NULL, ", ");  // takes a list of delimiters
+    }
+    //Serial.println(index);
+// print the tokens
+    
+    for(int n = 0; n < index; n++)
+   { 
+    String val=strings[n];
+   readCard[n]=val.toInt();
+    Serial.println(readCard[n]);
+    Serial.println(strings[n]);
+   }
+   if (!findCard()){
+    Serial.println("NO existe, creando");
+    addCard();
+   }else{
+    Serial.println("Ya existe");
+   }
+
 }
+//------------------------------------------------------------------------------------
+
+boolean validarID(char* array){
+  Serial.println("Validacion");
+  char *strings[10];
+  char *ptr = NULL;
+  byte index = 0;
+  ptr = strtok(array, ", ");  // takes a list of delimiters
+  while(ptr != NULL){
+      strings[index] = ptr; 
+      index++;
+      ptr = strtok(NULL, ", ");  // takes a list of delimiters
+  }
+  for(int n = 0; n < index; n++){ 
+    String val=strings[n];
+    readCard[n]=val.toInt();
+   }
+   return findCard();
+
+}
+void callback(char* topic, byte* payload, unsigned int length) {      //Funcion que se ejecuta cada que llega un mensaje y lo que hace es imprimir su contenido
+  Serial.print("Message arrived [");
+  String chat_id = String(bot.messages[bot.getUpdates(bot.last_message_received + 1)].chat_id);
+   Serial.print(topic);                                                               
+   Serial.print("] ");
+   char paychar[64];
+   for (int i = 0; i < length; i++) {
+     Serial.print((char)payload[i]);
+     paychar[i]=((char)payload[i]);
+   }
+   paychar[length]='\0';
+    if(strcmp(topic, "RegisRes") == 0){
+      Serial.println("ha llegado algo de registry");
+      Serial.println(paychar);
+      char * val=paychar;
+      if(paychar != "null"){
+         Serial.println(paychar);
+         Guardar(paychar);
+        bot.sendMessage(chat_id, "added ", "");
+        bot.sendMessage(chat_id, val, "");
+      }else{
+        bot.sendMessage(chat_id, "nothing added ", "");
+      }
+    }
+    else   if(strcmp(topic, "Validate") == 0){
+      char * val=paychar;
+      if(paychar != "null"){
+         boolean validID=validarID(paychar);
+         Serial.println(validID);
+         if (!client.connected()) {
+           reconnect();
+         }
+         client.loop();
+         if(validID){
+         client.publish("ValidateRes","TRUE"); 
+          Serial.println("ES valido");
+          bot.sendMessage(chat_id, "Validado ", "");
+          bot.sendMessage(chat_id, val, "");
+        }else{
+          client.publish("ValidateRes","FALSE"); 
+          Serial.println("NO es valido");
+          bot.sendMessage(chat_id, "Invalido ", "");
+        }
+      }
+    }
+}
+
+//------------------------------------------------------------------------------------
+
 
 void loop() {
   if (millis() > Bot_lasttime + Bot_mtbs)  {
     int numNewMessages = bot.getUpdates(bot.last_message_received + 1);
-
     while(numNewMessages) {
       Serial.println("got response");
       handleNewMessages(numNewMessages);
